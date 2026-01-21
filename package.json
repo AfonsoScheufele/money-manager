@@ -1,0 +1,24 @@
+{
+  "name": "money-manager",
+  "version": "1.0.0",
+  "description": "Personal finance management system for tracking accounts, transactions, and budget control",
+  "main": "server/index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "cd server && go run main.go",
+    "client": "cd client && npm start",
+    "install-all": "npm install && cd server && go mod download && cd ../client && npm install"
+  },
+  "keywords": [
+    "finance",
+    "money",
+    "budget",
+    "tracker"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
+
