@@ -6,6 +6,9 @@ import Transactions from './components/Transactions';
 import AddTransaction from './components/AddTransaction';
 import Settings from './components/Settings';
 import SalaryManager from './components/SalaryManager';
+import History from './components/History';
+import Portfolio from './components/Portfolio';
+import InvestmentRecommendations from './components/InvestmentRecommendations';
 
 const API_URL = 'http://localhost:5000/api';
 
@@ -58,7 +61,7 @@ function App() {
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash.replace('#', '');
-      if (hash && ['dashboard', 'transactions', 'add', 'salary', 'settings'].includes(hash)) {
+      if (hash && ['dashboard', 'transactions', 'add', 'salary', 'history', 'portfolio', 'recommendations', 'settings'].includes(hash)) {
         setActiveTab(hash);
       }
     };
@@ -105,6 +108,24 @@ function App() {
           Salário
         </button>
         <button 
+          className={activeTab === 'history' ? 'active' : ''}
+          onClick={() => setActiveTab('history')}
+        >
+          Histórico
+        </button>
+        <button 
+          className={activeTab === 'portfolio' ? 'active' : ''}
+          onClick={() => setActiveTab('portfolio')}
+        >
+          Carteira
+        </button>
+        <button 
+          className={activeTab === 'recommendations' ? 'active' : ''}
+          onClick={() => setActiveTab('recommendations')}
+        >
+          Recomendações
+        </button>
+        <button 
           className={activeTab === 'settings' ? 'active' : ''}
           onClick={() => setActiveTab('settings')}
         >
@@ -137,6 +158,15 @@ function App() {
             categories={Array.isArray(categories) ? categories : []}
             onRefresh={handleRefresh}
           />
+        )}
+        {activeTab === 'history' && (
+          <History />
+        )}
+        {activeTab === 'portfolio' && (
+          <Portfolio />
+        )}
+        {activeTab === 'recommendations' && (
+          <InvestmentRecommendations />
         )}
         {activeTab === 'settings' && (
           <Settings onRefresh={handleRefresh} />

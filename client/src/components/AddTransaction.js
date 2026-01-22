@@ -76,9 +76,9 @@ const AddTransaction = ({ accounts, categories, onRefresh, onClose }) => {
         },
         body: JSON.stringify({
           ...formData,
-          account_id: accountId,
+          account_id: parseInt(accountId),
           amount: parseFloat(formData.amount),
-          category_id: formData.category_id || null
+          category_id: formData.category_id ? parseInt(formData.category_id) : null
         }),
       });
 

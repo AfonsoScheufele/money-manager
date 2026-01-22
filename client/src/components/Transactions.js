@@ -125,8 +125,9 @@ const Transactions = ({ transactions, categories, onRefresh }) => {
         },
         body: JSON.stringify({
           ...editForm,
+          account_id: parseInt(editForm.account_id),
           amount: parseFloat(editForm.amount),
-          category_id: editForm.category_id || null
+          category_id: editForm.category_id ? parseInt(editForm.category_id) : null
         }),
       });
 

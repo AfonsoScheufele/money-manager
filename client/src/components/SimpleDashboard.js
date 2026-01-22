@@ -66,8 +66,8 @@ const SimpleDashboard = ({ refreshKey }) => {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 amount: config.amount,
-                account_id: accountsArray[0].id,
-                category_id: config.category_id
+                account_id: parseInt(accountsArray[0].id),
+                category_id: config.category_id ? (typeof config.category_id === 'string' ? parseInt(config.category_id) : config.category_id) : null
               }),
             });
             const updateData = await updateRes.json();
@@ -213,7 +213,8 @@ const SimpleDashboard = ({ refreshKey }) => {
             </div>
             <div style={{ marginTop: '20px', padding: '16px', background: '#f8fafc', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
               <p style={{ margin: 0, fontSize: '0.875rem', color: '#64748b', textAlign: 'center' }}>
-                Para adicionar ou editar despesas, use a aba <strong>"Nova Despesa"</strong> ou <strong>"Despesas do Mês"</strong>
+                Para adicionar ou editar despesas, use a aba <strong>"Nova Despesa"</strong> ou <strong>"Despesas do Mês"</strong>. 
+                Para ver o histórico completo, acesse a aba <strong>"Histórico"</strong>.
               </p>
             </div>
           </>
