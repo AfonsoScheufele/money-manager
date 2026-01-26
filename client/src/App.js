@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import './App.css';
-import Dashboard from './components/Dashboard';
 import SimpleDashboard from './components/SimpleDashboard';
 import Transactions from './components/Transactions';
 import AddTransaction from './components/AddTransaction';
@@ -9,6 +8,7 @@ import SalaryManager from './components/SalaryManager';
 import History from './components/History';
 import Portfolio from './components/Portfolio';
 import InvestmentRecommendations from './components/InvestmentRecommendations';
+import Installments from './components/Installments';
 
 const API_URL = 'http://localhost:5000/api';
 
@@ -17,27 +17,23 @@ function App() {
   const [accounts, setAccounts] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [categories, setCategories] = useState([]);
-  const [stats, setStats] = useState({ totalBalance: 0, monthlyIncome: 0, monthlyExpenses: 0, monthlyBalance: 0 });
   const [refreshKey, setRefreshKey] = useState(0);
 
   const fetchData = async () => {
     try {
-      const [accountsRes, transactionsRes, categoriesRes, statsRes] = await Promise.all([
+      const [accountsRes, transactionsRes, categoriesRes] = await Promise.all([
         fetch(`${API_URL}/accounts`),
         fetch(`${API_URL}/transactions`),
-        fetch(`${API_URL}/categories`),
-        fetch(`${API_URL}/stats`)
+        fetch(`${API_URL}/categories`)
       ]);
 
       const accountsData = await accountsRes.json();
       const transactionsData = await transactionsRes.json();
       const categoriesData = await categoriesRes.json();
-      const statsData = await statsRes.json();
       
       setAccounts(Array.isArray(accountsData) ? accountsData : []);
       setTransactions(Array.isArray(transactionsData) ? transactionsData : []);
       setCategories(Array.isArray(categoriesData) ? categoriesData : []);
-      setStats(statsData || { totalBalance: 0, monthlyIncome: 0, monthlyExpenses: 0, monthlyBalance: 0 });
     } catch (error) {
       console.error('Error fetching data:', error);
     }
@@ -61,7 +57,7 @@ function App() {
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash.replace('#', '');
-      if (hash && ['dashboard', 'transactions', 'add', 'salary', 'history', 'portfolio', 'recommendations', 'settings'].includes(hash)) {
+      if (hash && ['dashboard', 'transactions', 'add', 'salary', 'history', 'portfolio', 'recommendations', 'installments', 'settings'].includes(hash)) {
         setActiveTab(hash);
       }
     };
@@ -126,6 +122,12 @@ function App() {
           Recomendações
         </button>
         <button 
+          className={activeTab === 'installments' ? 'active' : ''}
+          onClick={() => setActiveTab('installments')}
+        >
+          Parcelas
+        </button>
+        <button 
           className={activeTab === 'settings' ? 'active' : ''}
           onClick={() => setActiveTab('settings')}
         >
@@ -167,6 +169,9 @@ function App() {
         )}
         {activeTab === 'recommendations' && (
           <InvestmentRecommendations />
+        )}
+        {activeTab === 'installments' && (
+          <Installments />
         )}
         {activeTab === 'settings' && (
           <Settings onRefresh={handleRefresh} />

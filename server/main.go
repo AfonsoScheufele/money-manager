@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -74,6 +75,32 @@ type Investment struct {
 	Notes           *string `json:"notes"`
 	CreatedAt       string  `json:"created_at"`
 	UpdatedAt       string  `json:"updated_at"`
+}
+
+type Installment struct {
+	ID                int     `json:"id"`
+	Description       string  `json:"description"`
+	TotalAmount       float64 `json:"total_amount"`
+	InstallmentsCount int     `json:"installments_count"`
+	InstallmentAmount float64 `json:"installment_amount"`
+	StartDate         string  `json:"start_date"`
+	AccountID         int     `json:"account_id"`
+	CategoryID        *int    `json:"category_id"`
+	Status            string  `json:"status"`
+	CreatedAt         string  `json:"created_at"`
+	AccountName       *string `json:"account_name"`
+	CategoryName      *string `json:"category_name"`
+}
+
+type InstallmentPayment struct {
+	ID               int     `json:"id"`
+	InstallmentID    int     `json:"installment_id"`
+	InstallmentNumber int    `json:"installment_number"`
+	Amount           float64 `json:"amount"`
+	DueDate          string  `json:"due_date"`
+	PaidDate         *string `json:"paid_date"`
+	TransactionID    *int    `json:"transaction_id"`
+	CreatedAt        string  `json:"created_at"`
 }
 
 var db *sql.DB
@@ -155,6 +182,32 @@ func initDB() {
 			notes TEXT,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS installments (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			description TEXT NOT NULL,
+			total_amount REAL NOT NULL,
+			installments_count INTEGER NOT NULL,
+			installment_amount REAL NOT NULL,
+			start_date TEXT NOT NULL,
+			account_id INTEGER NOT NULL,
+			category_id INTEGER,
+			status TEXT DEFAULT 'active',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (account_id) REFERENCES accounts(id),
+			FOREIGN KEY (category_id) REFERENCES categories(id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS installment_payments (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			installment_id INTEGER NOT NULL,
+			installment_number INTEGER NOT NULL,
+			amount REAL NOT NULL,
+			due_date TEXT NOT NULL,
+			paid_date TEXT,
+			transaction_id INTEGER,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (installment_id) REFERENCES installments(id) ON DELETE CASCADE,
+			FOREIGN KEY (transaction_id) REFERENCES transactions(id)
 		)`,
 	}
 
@@ -265,6 +318,13 @@ func main() {
 	r.GET("/api/investments/search", searchInvestmentSuggestions)
 	r.GET("/api/investments/analysis", getInvestmentAnalysis)
 	r.GET("/api/investments/recommendations", getInvestmentRecommendations)
+	r.POST("/api/investments/:id/sell", sellInvestment)
+
+	r.GET("/api/installments", getInstallments)
+	r.POST("/api/installments", createInstallment)
+	r.GET("/api/installments/:id/payments", getInstallmentPayments)
+	r.POST("/api/installments/:id/pay", payInstallment)
+	r.DELETE("/api/installments/:id", deleteInstallment)
 
 	log.Printf("Server running on port %s", port)
 	r.Run(":" + port)
@@ -848,63 +908,64 @@ func getFirstBusinessDay(year int, month time.Month) time.Time {
 
 // Check and process salary
 func checkAndProcessSalary() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Panic in checkAndProcessSalary: %v", r)
+		}
+	}()
+	
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
 	
 	for range ticker.C {
-		now := time.Now()
-		currentMonth := now.Format("2006-01")
-		
-		// Get salary config
-		var config SalaryConfig
-		var lastPaidMonth sql.NullString
-		err := db.QueryRow("SELECT id, amount, account_id, category_id, last_paid_month FROM salary_config LIMIT 1").Scan(
-			&config.ID, &config.Amount, &config.AccountID, &config.CategoryID, &lastPaidMonth,
-		)
-		
-		if err == sql.ErrNoRows {
-			// No salary config, skip
-			continue
-		}
-		
-		if err != nil {
-			log.Printf("Error checking salary config: %v", err)
-			continue
-		}
-		
-		config.LastPaidMonth = lastPaidMonth.String
-		
-		// Check if already paid this month
-		if config.LastPaidMonth == currentMonth {
-			continue
-		}
-		
-		// Check if today is the first business day or after
-		firstBusinessDay := getFirstBusinessDay(now.Year(), now.Month())
-		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
-		
-		if today.Equal(firstBusinessDay) || today.After(firstBusinessDay) {
-			// Process salary
-			todayStr := now.Format("2006-01-02")
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
 			
-			// Create transaction
-			_, err = db.Exec(
-				"INSERT INTO transactions (account_id, category_id, type, amount, description, date) VALUES (?, ?, ?, ?, ?, ?)",
-				config.AccountID, config.CategoryID, "income", config.Amount, "Salário mensal", todayStr,
+			now := time.Now()
+			currentMonth := now.Format("2006-01")
+			
+			var config SalaryConfig
+			var lastPaidMonth sql.NullString
+			err := db.QueryRowContext(ctx, "SELECT id, amount, account_id, category_id, last_paid_month FROM salary_config LIMIT 1").Scan(
+				&config.ID, &config.Amount, &config.AccountID, &config.CategoryID, &lastPaidMonth,
 			)
 			
-			if err != nil {
-				log.Printf("Error creating salary transaction: %v", err)
-			} else {
-				// Update account balance
-				db.Exec("UPDATE accounts SET balance = balance + ? WHERE id = ?", config.Amount, config.AccountID)
-				
-				// Update last paid month
-				db.Exec("UPDATE salary_config SET last_paid_month = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", currentMonth, config.ID)
-				
-				log.Printf("Salary of %.2f processed for account %d", config.Amount, config.AccountID)
+			if err == sql.ErrNoRows {
+				return
 			}
-		}
+			
+			if err != nil {
+				log.Printf("Error checking salary config: %v", err)
+				return
+			}
+			
+			config.LastPaidMonth = lastPaidMonth.String
+			
+			if config.LastPaidMonth == currentMonth {
+				return
+			}
+			
+			firstBusinessDay := getFirstBusinessDay(now.Year(), now.Month())
+			today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
+			
+			if today.Equal(firstBusinessDay) || today.After(firstBusinessDay) {
+				todayStr := now.Format("2006-01-02")
+				
+				_, err = db.ExecContext(ctx,
+					"INSERT INTO transactions (account_id, category_id, type, amount, description, date) VALUES (?, ?, ?, ?, ?, ?)",
+					config.AccountID, config.CategoryID, "income", config.Amount, "Salário mensal", todayStr,
+				)
+				
+				if err != nil {
+					log.Printf("Error creating salary transaction: %v", err)
+				} else {
+					db.ExecContext(ctx, "UPDATE accounts SET balance = balance + ? WHERE id = ?", config.Amount, config.AccountID)
+					db.ExecContext(ctx, "UPDATE salary_config SET last_paid_month = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", currentMonth, config.ID)
+					log.Printf("Salary of %.2f processed for account %d", config.Amount, config.AccountID)
+				}
+			}
+		}()
 	}
 }
 
@@ -1268,6 +1329,140 @@ func deleteInvestment(c *gin.Context) {
 	}
 	
 	c.JSON(200, gin.H{"message": "Investment deleted successfully"})
+}
+
+func sellInvestment(c *gin.Context) {
+	id := c.Param("id")
+	
+	var sellData struct {
+		Quantity   float64 `json:"quantity"`
+		SellPrice  float64 `json:"sell_price"`
+		AccountID  int     `json:"account_id"`
+	}
+	
+	if err := c.ShouldBindJSON(&sellData); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	
+	if sellData.Quantity <= 0 {
+		c.JSON(400, gin.H{"error": "Quantidade deve ser maior que zero"})
+		return
+	}
+	
+	if sellData.SellPrice <= 0 {
+		c.JSON(400, gin.H{"error": "Preço de venda deve ser maior que zero"})
+		return
+	}
+	
+	var inv Investment
+	err := db.QueryRow(`
+		SELECT id, ticker, name, type, quantity, average_price, total_invested, current_price
+		FROM investments WHERE id = ?
+	`, id).Scan(
+		&inv.ID, &inv.Ticker, &inv.Name, &inv.Type, &inv.Quantity, &inv.AveragePrice, &inv.TotalInvested, &inv.CurrentPrice,
+	)
+	
+	if err == sql.ErrNoRows {
+		c.JSON(404, gin.H{"error": "Investimento não encontrado"})
+		return
+	}
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	
+	if sellData.Quantity > inv.Quantity {
+		c.JSON(400, gin.H{"error": fmt.Sprintf("Quantidade a vender (%.2f) é maior que a quantidade disponível (%.2f)", sellData.Quantity, inv.Quantity)})
+		return
+	}
+	
+	sellValue := sellData.Quantity * sellData.SellPrice
+	averageCost := (inv.TotalInvested / inv.Quantity) * sellData.Quantity
+	profitLoss := sellValue - averageCost
+	profitLossPercent := (profitLoss / averageCost) * 100
+	
+	tx, err := db.Begin()
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	defer tx.Rollback()
+	
+	if sellData.Quantity == inv.Quantity {
+		_, err = tx.Exec("DELETE FROM investments WHERE id = ?", id)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+	} else {
+		newQuantity := inv.Quantity - sellData.Quantity
+		newTotalInvested := inv.TotalInvested - averageCost
+		
+		if inv.CurrentPrice != nil {
+			newCurrentValue := newQuantity * (*inv.CurrentPrice)
+			newProfitLoss := newCurrentValue - newTotalInvested
+			newProfitLossPercent := (newProfitLoss / newTotalInvested) * 100
+			
+			_, err = tx.Exec(`
+				UPDATE investments SET 
+					quantity = ?, total_invested = ?, current_value = ?, 
+					profit_loss = ?, profit_loss_percent = ?, updated_at = CURRENT_TIMESTAMP
+				WHERE id = ?
+			`, newQuantity, newTotalInvested, newCurrentValue, newProfitLoss, newProfitLossPercent, id)
+		} else {
+			_, err = tx.Exec(`
+				UPDATE investments SET 
+					quantity = ?, total_invested = ?, updated_at = CURRENT_TIMESTAMP
+				WHERE id = ?
+			`, newQuantity, newTotalInvested, id)
+		}
+		
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	
+	var categoryID *int
+	err = db.QueryRow("SELECT id FROM categories WHERE name = 'Investimentos' AND type = 'income' LIMIT 1").Scan(&categoryID)
+	if err != nil {
+		log.Printf("Category 'Investimentos' not found, using NULL")
+	}
+	
+	todayStr := time.Now().Format("2006-01-02")
+	description := fmt.Sprintf("Venda de %s: %.2f x %s @ R$ %.2f", inv.Ticker, sellData.Quantity, inv.Name, sellData.SellPrice)
+	
+	_, err = tx.Exec(
+		"INSERT INTO transactions (account_id, category_id, type, amount, description, date) VALUES (?, ?, ?, ?, ?, ?)",
+		sellData.AccountID, categoryID, "income", sellValue, description, todayStr,
+	)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	
+	_, err = tx.Exec(
+		"UPDATE accounts SET balance = balance + ? WHERE id = ?",
+		sellValue, sellData.AccountID,
+	)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	
+	if err = tx.Commit(); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	
+	c.JSON(200, gin.H{
+		"message": "Venda realizada com sucesso",
+		"sell_value": sellValue,
+		"profit_loss": profitLoss,
+		"profit_loss_percent": profitLossPercent,
+		"remaining_quantity": inv.Quantity - sellData.Quantity,
+	})
 }
 
 func getInvestmentsSummary(c *gin.Context) {
@@ -2174,54 +2369,385 @@ func searchInvestmentSuggestions(c *gin.Context) {
 
 // Auto-update investment prices periodically
 func autoUpdateInvestmentPrices() {
-	ticker := time.NewTicker(2 * time.Minute) // Update every 2 minutes for real-time updates
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Panic in autoUpdateInvestmentPrices: %v", r)
+			// Restart the goroutine after panic
+			time.Sleep(1 * time.Minute)
+			go autoUpdateInvestmentPrices()
+		}
+	}()
+	
+	// Wait 2 minutes before first update
+	time.Sleep(2 * time.Minute)
+	
+	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
 	
 	for range ticker.C {
-		rows, err := db.Query("SELECT id, ticker, quantity, average_price, total_invested FROM investments")
-		if err != nil {
-			log.Printf("Error fetching investments for auto-update: %v", err)
-			continue
-		}
-		defer rows.Close()
-		
-		for rows.Next() {
-			var inv Investment
-			err := rows.Scan(&inv.ID, &inv.Ticker, &inv.Quantity, &inv.AveragePrice, &inv.TotalInvested)
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+			
+			rows, err := db.QueryContext(ctx, "SELECT id, ticker, quantity, average_price, total_invested FROM investments LIMIT 50")
 			if err != nil {
-				continue
+				log.Printf("Error fetching investments for auto-update: %v", err)
+				return
+			}
+			defer rows.Close()
+			
+			var investments []Investment
+			for rows.Next() {
+				var inv Investment
+				err := rows.Scan(&inv.ID, &inv.Ticker, &inv.Quantity, &inv.AveragePrice, &inv.TotalInvested)
+				if err != nil {
+					continue
+				}
+				investments = append(investments, inv)
 			}
 			
-			// Fetch current price
-			currentPrice, err := getYahooFinanceQuote(inv.Ticker)
-			if err != nil {
-				log.Printf("Error fetching quote for %s: %v", inv.Ticker, err)
-				continue
+			if len(investments) == 0 {
+				return
 			}
 			
-			// Calculate values
-			currentValue := inv.Quantity * currentPrice
-			profitLoss := currentValue - inv.TotalInvested
-			profitLossPercent := (profitLoss / inv.TotalInvested) * 100
+			updated := 0
+			failed := 0
 			
-			// Update database
-			_, err = db.Exec(
-				`UPDATE investments SET 
-				 current_price = ?, current_value = ?, profit_loss = ?, profit_loss_percent = ?,
-				 updated_at = CURRENT_TIMESTAMP
-				 WHERE id = ?`,
-				currentPrice, currentValue, profitLoss, profitLossPercent, inv.ID,
-			)
-			if err != nil {
-				log.Printf("Error updating investment %s: %v", inv.Ticker, err)
-				continue
+			for i, inv := range investments {
+				select {
+				case <-ctx.Done():
+					log.Printf("Auto-update timeout after %d investments", i)
+					return
+				default:
+				}
+				
+				priceCtx, priceCancel := context.WithTimeout(context.Background(), 20*time.Second)
+				
+				priceChan := make(chan float64, 1)
+				errChan := make(chan error, 1)
+				
+				go func(ticker string) {
+					defer priceCancel()
+					price, err := getYahooFinanceQuote(ticker)
+					if err != nil {
+						errChan <- err
+						return
+					}
+					priceChan <- price
+				}(inv.Ticker)
+				
+				select {
+				case currentPrice := <-priceChan:
+					currentValue := inv.Quantity * currentPrice
+					profitLoss := currentValue - inv.TotalInvested
+					profitLossPercent := 0.0
+					if inv.TotalInvested > 0 {
+						profitLossPercent = (profitLoss / inv.TotalInvested) * 100
+					}
+					
+					updateCtx, updateCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					
+					maxRetries := 3
+					var updateErr error
+					for retry := 0; retry < maxRetries; retry++ {
+						_, updateErr = db.ExecContext(updateCtx,
+							`UPDATE investments SET 
+							 current_price = ?, current_value = ?, profit_loss = ?, profit_loss_percent = ?,
+							 updated_at = CURRENT_TIMESTAMP
+							 WHERE id = ?`,
+							currentPrice, currentValue, profitLoss, profitLossPercent, inv.ID,
+						)
+						if updateErr == nil {
+							break
+						}
+						if strings.Contains(updateErr.Error(), "locked") && retry < maxRetries-1 {
+							time.Sleep(time.Duration(retry+1) * 200 * time.Millisecond)
+							continue
+						}
+						break
+					}
+					updateCancel()
+					
+					if updateErr != nil {
+						log.Printf("Error updating investment %s: %v", inv.Ticker, updateErr)
+						failed++
+					} else {
+						updated++
+					}
+				case err := <-errChan:
+					log.Printf("Error fetching quote for %s: %v", inv.Ticker, err)
+					failed++
+				case <-priceCtx.Done():
+					log.Printf("Timeout fetching quote for %s", inv.Ticker)
+					failed++
+				}
+				
+				if i < len(investments)-1 {
+					time.Sleep(2 * time.Second)
+				}
 			}
 			
-			// Small delay to avoid rate limiting
-			time.Sleep(500 * time.Millisecond)
-		}
-		
-		log.Println("Investment prices auto-updated")
+			if updated > 0 {
+				log.Printf("Investment prices auto-updated: %d success, %d failed", updated, failed)
+			}
+		}()
 	}
+}
+
+func getInstallments(c *gin.Context) {
+	query := `
+		SELECT 
+			i.id, i.description, i.total_amount, i.installments_count, i.installment_amount,
+			i.start_date, i.account_id, i.category_id, i.status, i.created_at,
+			a.name as account_name,
+			c.name as category_name
+		FROM installments i
+		LEFT JOIN accounts a ON i.account_id = a.id
+		LEFT JOIN categories c ON i.category_id = c.id
+		ORDER BY i.created_at DESC
+	`
+	
+	rows, err := db.Query(query)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+	
+	var installments []Installment
+	for rows.Next() {
+		var inst Installment
+		err := rows.Scan(
+			&inst.ID, &inst.Description, &inst.TotalAmount, &inst.InstallmentsCount,
+			&inst.InstallmentAmount, &inst.StartDate, &inst.AccountID, &inst.CategoryID,
+			&inst.Status, &inst.CreatedAt, &inst.AccountName, &inst.CategoryName,
+		)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		installments = append(installments, inst)
+	}
+	
+	c.JSON(200, installments)
+}
+
+func createInstallment(c *gin.Context) {
+	var inst Installment
+	if err := c.ShouldBindJSON(&inst); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	
+	if inst.Description == "" || inst.TotalAmount <= 0 || inst.InstallmentsCount <= 0 {
+		c.JSON(400, gin.H{"error": "Description, total_amount and installments_count are required"})
+		return
+	}
+	
+	inst.InstallmentAmount = inst.TotalAmount / float64(inst.InstallmentsCount)
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	result, err := db.ExecContext(ctx,
+		`INSERT INTO installments (description, total_amount, installments_count, installment_amount, start_date, account_id, category_id, status)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 'active')`,
+		inst.Description, inst.TotalAmount, inst.InstallmentsCount, inst.InstallmentAmount,
+		inst.StartDate, inst.AccountID, inst.CategoryID,
+	)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	
+	id, _ := result.LastInsertId()
+	inst.ID = int(id)
+	
+	startDate, err := time.Parse("2006-01-02", inst.StartDate)
+	if err != nil {
+		c.JSON(500, gin.H{"error": "Invalid start_date format. Use YYYY-MM-DD"})
+		return
+	}
+	
+	for i := 0; i < inst.InstallmentsCount; i++ {
+		dueDate := startDate.AddDate(0, i, 0)
+		_, err = db.ExecContext(ctx,
+			`INSERT INTO installment_payments (installment_id, installment_number, amount, due_date)
+			 VALUES (?, ?, ?, ?)`,
+			inst.ID, i+1, inst.InstallmentAmount, dueDate.Format("2006-01-02"),
+		)
+		if err != nil {
+			log.Printf("Error creating payment %d for installment %d: %v", i+1, inst.ID, err)
+		}
+	}
+	
+	c.JSON(200, inst)
+}
+
+func getInstallmentPayments(c *gin.Context) {
+	installmentID := c.Param("id")
+	
+	rows, err := db.Query(
+		`SELECT id, installment_id, installment_number, amount, due_date, paid_date, transaction_id, created_at
+		 FROM installment_payments
+		 WHERE installment_id = ?
+		 ORDER BY installment_number`,
+		installmentID,
+	)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+	
+	var payments []InstallmentPayment
+	for rows.Next() {
+		var pay InstallmentPayment
+		err := rows.Scan(
+			&pay.ID, &pay.InstallmentID, &pay.InstallmentNumber, &pay.Amount,
+			&pay.DueDate, &pay.PaidDate, &pay.TransactionID, &pay.CreatedAt,
+		)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		payments = append(payments, pay)
+	}
+	
+	c.JSON(200, payments)
+}
+
+func payInstallment(c *gin.Context) {
+	installmentID := c.Param("id")
+	
+	var req struct {
+		PaymentID int    `json:"payment_id"`
+		Date      string `json:"date"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	var payment InstallmentPayment
+	err := db.QueryRowContext(ctx,
+		`SELECT id, installment_id, amount, due_date FROM installment_payments WHERE id = ?`,
+		req.PaymentID,
+	).Scan(&payment.ID, &payment.InstallmentID, &payment.Amount, &payment.DueDate)
+	if err != nil {
+		c.JSON(404, gin.H{"error": "Payment not found"})
+		return
+	}
+	
+	installmentIDInt, err := strconv.Atoi(installmentID)
+	if err != nil {
+		c.JSON(400, gin.H{"error": "Invalid installment ID"})
+		return
+	}
+	
+	if payment.InstallmentID != installmentIDInt {
+		c.JSON(400, gin.H{"error": "Payment does not belong to this installment"})
+		return
+	}
+	
+	var inst Installment
+	err = db.QueryRowContext(ctx,
+		`SELECT account_id, category_id FROM installments WHERE id = ?`,
+		installmentID,
+	).Scan(&inst.AccountID, &inst.CategoryID)
+	if err != nil {
+		c.JSON(404, gin.H{"error": "Installment not found"})
+		return
+	}
+	
+	var instDesc string
+	err = db.QueryRowContext(ctx, "SELECT description FROM installments WHERE id = ?", installmentID).Scan(&instDesc)
+	if err != nil {
+		instDesc = "Compra Parcelada"
+	}
+	
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	defer tx.Rollback()
+	
+	result, err := tx.ExecContext(ctx,
+		`INSERT INTO transactions (account_id, category_id, type, amount, description, date)
+		 VALUES (?, ?, 'expense', ?, ?, ?)`,
+		inst.AccountID, inst.CategoryID, payment.Amount,
+		fmt.Sprintf("%s - Parcela %d", instDesc, payment.InstallmentNumber),
+		req.Date,
+	)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	
+	transactionID, _ := result.LastInsertId()
+	
+	_, err = tx.ExecContext(ctx,
+		`UPDATE accounts SET balance = balance - ? WHERE id = ?`,
+		payment.Amount, inst.AccountID,
+	)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	
+	_, err = tx.ExecContext(ctx,
+		`UPDATE installment_payments SET paid_date = ?, transaction_id = ? WHERE id = ?`,
+		req.Date, transactionID, req.PaymentID,
+	)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	
+	var paidCount int
+	err = tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM installment_payments WHERE installment_id = ? AND paid_date IS NOT NULL`,
+		installmentID,
+	).Scan(&paidCount)
+	if err == nil {
+		var totalCount int
+		tx.QueryRowContext(ctx,
+			`SELECT installments_count FROM installments WHERE id = ?`,
+			installmentID,
+		).Scan(&totalCount)
+		
+		if paidCount >= totalCount {
+			_, err = tx.ExecContext(ctx,
+				`UPDATE installments SET status = 'completed' WHERE id = ?`,
+				installmentID,
+			)
+		}
+	}
+	
+	if err = tx.Commit(); err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	
+	c.JSON(200, gin.H{"message": "Payment processed successfully", "transaction_id": transactionID})
+}
+
+func deleteInstallment(c *gin.Context) {
+	installmentID := c.Param("id")
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	_, err := db.ExecContext(ctx, "DELETE FROM installments WHERE id = ?", installmentID)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+	
+	c.JSON(200, gin.H{"message": "Installment deleted successfully"})
 }
 

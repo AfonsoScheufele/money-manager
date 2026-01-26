@@ -19,6 +19,13 @@ const Portfolio = () => {
   const [filteredSuggestions, setFilteredSuggestions] = useState([]);
   const [analysis, setAnalysis] = useState(null);
   const [loadingAnalysis, setLoadingAnalysis] = useState(false);
+  const [sellingId, setSellingId] = useState(null);
+  const [sellForm, setSellForm] = useState({
+    quantity: '',
+    sell_price: '',
+    account_id: ''
+  });
+  const [accounts, setAccounts] = useState([]);
   const [formData, setFormData] = useState({
     ticker: '',
     name: '',
@@ -95,7 +102,18 @@ const Portfolio = () => {
 
   useEffect(() => {
     fetchData();
+    fetchAccounts();
   }, []);
+
+  const fetchAccounts = async () => {
+    try {
+      const response = await fetch(`${API_URL}/accounts`);
+      const data = await response.json();
+      setAccounts(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error('Error fetching accounts:', error);
+    }
+  };
 
   // Check for recommended investment from Recommendations page
   useEffect(() => {
@@ -120,15 +138,15 @@ const Portfolio = () => {
     }
   }, []);
 
-  // Auto-update prices every 2 minutes
+  // Auto-refresh data every 10 minutes (server updates prices automatically)
   useEffect(() => {
     if (investments.length === 0) return;
     
-    const priceUpdateInterval = setInterval(() => {
-      updateAllPrices(true); // Silent update
-    }, 120000); // 2 minutes
+    const refreshInterval = setInterval(() => {
+      fetchData(); // Just refresh data, don't trigger price updates
+    }, 600000); // 10 minutes
     
-    return () => clearInterval(priceUpdateInterval);
+    return () => clearInterval(refreshInterval);
   }, [investments.length]);
 
   const fetchData = async () => {
@@ -341,6 +359,64 @@ const Portfolio = () => {
     } catch (error) {
       console.error('Error deleting investment:', error);
       alert('Erro ao excluir investimento');
+    }
+  };
+
+  const handleSellClick = (investment) => {
+    setSellingId(investment.id);
+    setSellForm({
+      quantity: investment.quantity.toString(),
+      sell_price: investment.current_price ? investment.current_price.toString() : '',
+      account_id: accounts.length > 0 ? accounts[0].id.toString() : ''
+    });
+  };
+
+  const handleSell = async (e) => {
+    e.preventDefault();
+    
+    if (!sellForm.quantity || !sellForm.sell_price || !sellForm.account_id) {
+      alert('Preencha todos os campos');
+      return;
+    }
+
+    const quantity = parseFloat(sellForm.quantity);
+    const sellPrice = parseFloat(sellForm.sell_price);
+    const accountId = parseInt(sellForm.account_id);
+
+    if (quantity <= 0 || sellPrice <= 0) {
+      alert('Quantidade e preço devem ser maiores que zero');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/investments/${sellingId}/sell`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          quantity: quantity,
+          sell_price: sellPrice,
+          account_id: accountId
+        })
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        alert(`Venda realizada! Valor: R$ ${data.sell_value?.toFixed(2) || '0.00'}\n${data.profit_loss >= 0 ? 'Lucro' : 'Prejuízo'}: R$ ${Math.abs(data.profit_loss || 0).toFixed(2)} (${data.profit_loss_percent?.toFixed(2) || '0.00'}%)`);
+        setSellingId(null);
+        setSellForm({ quantity: '', sell_price: '', account_id: '' });
+        fetchData();
+        if (window.fetchAccounts) {
+          window.fetchAccounts();
+        }
+      } else {
+        alert(data.error || 'Erro ao realizar venda');
+      }
+    } catch (error) {
+      console.error('Error selling investment:', error);
+      alert('Erro ao realizar venda');
     }
   };
 
@@ -983,6 +1059,13 @@ const Portfolio = () => {
                           Editar
                         </button>
                         <button
+                          onClick={() => handleSellClick(inv)}
+                          className="btn"
+                          style={{ padding: '6px 12px', fontSize: '0.85rem', background: '#10b981', color: 'white' }}
+                        >
+                          Vender
+                        </button>
+                        <button
                           onClick={() => handleDelete(inv.id)}
                           className="btn"
                           style={{ padding: '6px 12px', fontSize: '0.85rem', background: '#ef4444', color: 'white' }}
@@ -995,6 +1078,116 @@ const Portfolio = () => {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {sellingId && (
+          <div style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0,0,0,0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000
+          }}>
+            <div style={{
+              background: 'white',
+              padding: '24px',
+              borderRadius: '8px',
+              maxWidth: '500px',
+              width: '90%',
+              maxHeight: '90vh',
+              overflow: 'auto'
+            }}>
+              <h3 style={{ marginTop: 0, marginBottom: '20px' }}>Vender Investimento</h3>
+              <form onSubmit={handleSell}>
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>
+                    Quantidade a vender:
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    value={sellForm.quantity}
+                    onChange={(e) => setSellForm({ ...sellForm, quantity: e.target.value })}
+                    required
+                    style={{
+                      width: '100%',
+                      padding: '8px',
+                      border: '1px solid #ddd',
+                      borderRadius: '4px'
+                    }}
+                  />
+                </div>
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>
+                    Preço de venda (R$):
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    value={sellForm.sell_price}
+                    onChange={(e) => setSellForm({ ...sellForm, sell_price: e.target.value })}
+                    required
+                    style={{
+                      width: '100%',
+                      padding: '8px',
+                      border: '1px solid #ddd',
+                      borderRadius: '4px'
+                    }}
+                  />
+                </div>
+                <div style={{ marginBottom: '20px' }}>
+                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500' }}>
+                    Conta para receber:
+                  </label>
+                  <select
+                    value={sellForm.account_id}
+                    onChange={(e) => setSellForm({ ...sellForm, account_id: e.target.value })}
+                    required
+                    style={{
+                      width: '100%',
+                      padding: '8px',
+                      border: '1px solid #ddd',
+                      borderRadius: '4px'
+                    }}
+                  >
+                    <option value="">Selecione uma conta</option>
+                    {accounts.map(acc => (
+                      <option key={acc.id} value={acc.id}>
+                        {acc.name} - {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(acc.balance || 0)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSellingId(null);
+                      setSellForm({ quantity: '', sell_price: '', account_id: '' });
+                    }}
+                    className="btn"
+                    style={{ padding: '10px 20px', background: '#6b7280', color: 'white' }}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn"
+                    style={{ padding: '10px 20px', background: '#10b981', color: 'white' }}
+                  >
+                    Confirmar Venda
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         )}
       </div>
